@@ -13,7 +13,7 @@ const SYSTEM_PROMPT = `You are a photo editor at a documentary photography agenc
 
 Evaluate each candidate as a photographer would: can powerful images be made here? Are there real people with faces and hands? Is there a place to go and stand in?
 
-Return 6 to 9 stories spread across DIFFERENT countries and continents when possible, so they map well. Prioritize stories behind the news, not the top headlines. Skip pure financial/political coverage with no visual substance.
+Return 10 to 20 stories spread across DIFFERENT countries and continents when possible, so they map well. Prioritize stories behind the news, not the top headlines. Skip pure financial/political coverage with no visual substance.
 
 For each story:
 - title: how a photographer would pitch it, not the news headline
@@ -42,7 +42,7 @@ Below are real news items from the last three weeks, pulled from a global media 
 CANDIDATE NEWS ITEMS:
 ${list}
 
-Return the strongest 6–9 photographic stories as a JSON object with this exact structure:
+Return the strongest 10–20 photographic stories as a JSON object with this exact structure:
 {"stories": [ { "title": "...", "source": "...", "place": "...", "lat": 0.0, "lng": 0.0, "why_photograph": "...", "scores": { "visual_depth": 0, "human_angle": 0, "accessibility": 0, "urgency": 0 }, "total_score": 0, "tags": ["..."] } ]}
 Output raw JSON only, no markdown.`;
 }
