@@ -372,6 +372,16 @@ const CHANNELS = [
     gdelt: '(pilgrimage OR pilgrim OR sanctuary OR shrine OR procession OR monastery OR devotion OR "holy site" OR ritual)',
     seed: 'faith, ritual and spirituality — pilgrimages, devotion, sacred places, the communal acts of belief',
   },
+  {
+    key: 'private', label: 'Private', sub: 'storie individuali',
+    gdelt: '(portrait OR survivor OR caregiver OR "daily life" OR lonely OR displaced OR artisan OR "last of" OR hermit OR elderly OR refugee OR childhood)',
+    seed: 'intimate and individual stories — a single person\'s life, domestic scenes, portraits of solitude or quiet resilience, the private face behind public events',
+  },
+  {
+    key: 'customs', label: 'Customs', sub: 'usi & costumi',
+    gdelt: '(tribe OR indigenous OR ceremony OR "rite of passage" OR "coming of age" OR "traditional dance" OR "ancestral" OR "folk tradition" OR "cultural practice" OR "sacred ritual")',
+    seed: 'social customs, rites and traditions of communities and tribes — ceremonies, rites of passage, ancestral practices, folk traditions and the communal rituals that bind people together',
+  },
 ];
 
 const ROLL_KEY = 'frame.roll.v4';
@@ -733,7 +743,7 @@ async function fetchGdelt(query) {
     throw new Error('Could not reach GDELT. Check your internet connection.');
   }
   if (res.status === 429) {
-    throw new Error('GDELT is busy right now. Wait 15-20 seconds and try again.');
+    throw new Error('GDELT_RATE_LIMITED');
   }
   if (!res.ok) {
     throw new Error(`GDELT ${res.status}`);
@@ -806,8 +816,12 @@ async function runSearch() {
       const rawArticles = await fetchGdelt(query);
       articles = dedupArticles(rawArticles);
     } catch (gdeltErr) {
-      console.warn('Browser GDELT fetch failed, server will retry:', gdeltErr);
-      source = 'server';
+      if (gdeltErr.message === 'GDELT_RATE_LIMITED') {
+        source = 'rate_limited';
+      } else {
+        console.warn('Browser GDELT fetch failed, server will retry:', gdeltErr);
+        source = 'server';
+      }
     }
 
     // 2. Update status while we wait for the curation
@@ -832,6 +846,7 @@ async function runSearch() {
         refine,
         articles,
         browserGdeltOk: source === 'browser',
+        gdeltRateLimited: source === 'rate_limited',
       }),
     });
     if (!res.ok) {

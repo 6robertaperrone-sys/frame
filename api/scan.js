@@ -128,6 +128,7 @@ export default async function handler(req, res) {
       refine = "",
       articles: clientArticles = [],
       browserGdeltOk = false,
+      gdeltRateLimited = false,
     } = req.body || {};
 
     if (!channel || !channel.label || !channel.seed) {
@@ -142,6 +143,14 @@ export default async function handler(req, res) {
     let usedServerFallback = false;
 
     if (!Array.isArray(candidates) || candidates.length === 0) {
+      // Browser was rate-limited by GDELT — don't retry server-side (same IP pool).
+      if (gdeltRateLimited) {
+        res.status(200).json({
+          stories: [],
+          notice: "GDELT is busy right now — wait 60 seconds and try again.",
+        });
+        return;
+      }
       // Browser reached GDELT successfully but got 0 results — don't retry
       // server-side (same query would also get 0, and Vercel IPs get rate-limited).
       if (browserGdeltOk) {
