@@ -827,7 +827,7 @@ async function runSearch() {
     // 2. Update status while we wait for the curation
     document.getElementById('statusText').textContent = source === 'browser'
       ? `Found ${articles.length} news items · curating the photographic angles…`
-      : `Reading the world's news on ${scanLabel} (via server)…`;
+      : `Querying the news feed…`;
     if (currentView === 'grid') {
       document.getElementById('gridView').innerHTML = `
         <div class="state-center">

@@ -1,78 +1,11 @@
 // FRAME — /api/scan
-// Accepts pre-fetched articles from the client when available,
-// otherwise fetches GDELT server-side as a fallback (with aggressive retry).
-// Then asks Claude to curate the strongest photographic stories.
+// Receives pre-fetched GDELT articles from the browser (uses the user's IP,
+// avoids Vercel shared-IP rate limits). If the browser couldn't reach GDELT,
+// returns a friendly retry message — no server-side GDELT fetch.
 
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
-
-// ---------- GDELT (server-side fallback) ----------
-
-async function fetchGdelt(query, attempt = 0) {
-  const params = new URLSearchParams({
-    query,
-    mode: "ArtList",
-    format: "json",
-    maxrecords: "75",
-    sort: "hybridrel",
-    timespan: "3weeks",
-  });
-  const url = `https://api.gdeltproject.org/api/v2/doc/doc?${params}`;
-
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "FRAME-photo-scouting/1.0 (documentary photography scouting tool)",
-    },
-  });
-
-  // GDELT rate-limits ~1 req/5s per IP. Vercel IPs are shared, so retry with
-  // exponential-ish backoff up to 3 attempts before giving up.
-  if (res.status === 429 && attempt < 2) {
-    const delay = attempt === 0 ? 7000 : 15000;
-    await new Promise((r) => setTimeout(r, delay));
-    return fetchGdelt(query, attempt + 1);
-  }
-
-  if (!res.ok) {
-    if (res.status === 429) {
-      throw new Error(
-        "GDELT is currently rate-limiting our server. Wait a minute and try again."
-      );
-    }
-    const body = await res.text().catch(() => "");
-    throw new Error(`GDELT ${res.status}: ${body.slice(0, 200)}`);
-  }
-
-  const text = await res.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  return Array.isArray(data.articles) ? data.articles : [];
-}
-
-function dedupArticles(articles) {
-  const seen = new Set();
-  const out = [];
-  for (const a of articles) {
-    const key = `${a.domain}|${(a.title || "").slice(0, 60).toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      title: a.title || "",
-      domain: a.domain || "",
-      country: a.sourcecountry || "",
-      language: a.language || "",
-      seendate: a.seendate || "",
-    });
-    if (out.length >= 40) break;
-  }
-  return out;
-}
 
 // ---------- Claude ----------
 
@@ -136,14 +69,10 @@ export default async function handler(req, res) {
       return;
     }
 
-    // 1. Use client-fetched GDELT articles when available (preferred — uses
-    //    the user's residential IP and avoids Vercel's shared-IP rate limits).
-    // 2. If empty (browser blocked the fetch), fall back to server-side fetch.
-    let candidates = clientArticles;
-    let usedServerFallback = false;
+    let candidates = Array.isArray(clientArticles) ? clientArticles : [];
 
-    if (!Array.isArray(candidates) || candidates.length === 0) {
-      // Browser was rate-limited by GDELT — don't retry server-side (same IP pool).
+    if (candidates.length === 0) {
+      // Browser was rate-limited by GDELT.
       if (gdeltRateLimited) {
         res.status(200).json({
           stories: [],
@@ -151,8 +80,7 @@ export default async function handler(req, res) {
         });
         return;
       }
-      // Browser reached GDELT successfully but got 0 results — don't retry
-      // server-side (same query would also get 0, and Vercel IPs get rate-limited).
+      // Browser reached GDELT successfully but got 0 results.
       if (browserGdeltOk) {
         res.status(200).json({
           stories: [],
@@ -160,24 +88,11 @@ export default async function handler(req, res) {
         });
         return;
       }
-      if (!channel.gdelt) {
-        res.status(400).json({
-          error: "No articles provided and no server-side query available.",
-        });
-        return;
-      }
-      usedServerFallback = true;
-      const query = refine
-        ? `${channel.gdelt} (${refine})`
-        : channel.gdelt;
-      const rawArticles = await fetchGdelt(query);
-      candidates = dedupArticles(rawArticles);
-    }
-
-    if (candidates.length === 0) {
+      // Browser got a network error — ask user to retry instead of hitting GDELT
+      // from Vercel's shared IPs (which get rate-limited immediately).
       res.status(200).json({
         stories: [],
-        notice: "No news items matched. Try a different channel or refine term.",
+        notice: "Couldn't reach the news feed — wait a moment and try again.",
       });
       return;
     }
@@ -214,7 +129,6 @@ export default async function handler(req, res) {
       stories,
       meta: {
         gdelt_candidates: candidates.length,
-        source: usedServerFallback ? "server" : "browser",
         model: message.model,
       },
     });
