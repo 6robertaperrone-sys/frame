@@ -724,35 +724,40 @@ function renderScout(r) {
     </div>`;
 }
 
-/* ---------- GDELT (client-side, to avoid Vercel shared-IP rate limits) ---------- */
+/* ---------- GDELT (client-side, with cache + rate-limit spacing) ---------- */
+const gdeltCache = {};       // query → { articles, ts }
+const GDELT_TTL = 20 * 60 * 1000; // 20 min
+let lastGdeltFetch = 0;
+
 async function fetchGdelt(query) {
+  // Return cached result if still fresh.
+  const cached = gdeltCache[query];
+  if (cached && Date.now() - cached.ts < GDELT_TTL) return cached.articles;
+
+  // Enforce at least 6 s between GDELT fetches (residential IP rate limit).
+  const wait = 6000 - (Date.now() - lastGdeltFetch);
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastGdeltFetch = Date.now();
+
   const params = new URLSearchParams({
-    query,
-    mode: 'ArtList',
-    format: 'json',
-    maxrecords: '75',
-    sort: 'hybridrel',
-    timespan: '3weeks',
+    query, mode: 'ArtList', format: 'json',
+    maxrecords: '75', sort: 'hybridrel', timespan: '3weeks',
   });
   const url = `https://api.gdeltproject.org/api/v2/doc/doc?${params}`;
 
   let res;
-  try {
-    res = await fetch(url);
-  } catch (e) {
-    throw new Error('Could not reach GDELT. Check your internet connection.');
-  }
-  if (res.status === 429) {
-    throw new Error('GDELT_RATE_LIMITED');
-  }
-  if (!res.ok) {
-    throw new Error(`GDELT ${res.status}`);
-  }
+  try { res = await fetch(url); }
+  catch { throw new Error('Could not reach GDELT. Check your internet connection.'); }
+
+  if (res.status === 429) throw new Error('GDELT_RATE_LIMITED');
+  if (!res.ok) throw new Error(`GDELT ${res.status}`);
+
   const text = await res.text();
   let data;
-  try { data = JSON.parse(text); }
-  catch { return []; }
-  return Array.isArray(data.articles) ? data.articles : [];
+  try { data = JSON.parse(text); } catch { return []; }
+  const articles = Array.isArray(data.articles) ? data.articles : [];
+  gdeltCache[query] = { articles, ts: Date.now() };
+  return articles;
 }
 
 function dedupArticles(articles) {
