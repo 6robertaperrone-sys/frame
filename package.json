@@ -1,0 +1,13 @@
+{
+  "name": "frame",
+  "version": "4.0.0",
+  "description": "FRAME — Hidden stories worth shooting. Documentary photography scouting tool.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0"
+  }
+}
