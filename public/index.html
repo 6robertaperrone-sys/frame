@@ -724,41 +724,57 @@ function renderScout(r) {
     </div>`;
 }
 
-/* ---------- GDELT (client-side, with cache + rate-limit spacing) ---------- */
-const gdeltCache = {};       // query → { articles, ts }
-const GDELT_TTL = 20 * 60 * 1000; // 20 min
-let lastGdeltFetch = 0;
+/* ---------- GDELT (client-side, cache + dedup-in-flight + 429 retry) ---------- */
+const gdeltCache = {};    // query → { articles, ts }
+const gdeltPending = {};  // query → Promise (dedup concurrent calls)
+const GDELT_TTL = 20 * 60 * 1000;
 
 async function fetchGdelt(query) {
   // Return cached result if still fresh.
   const cached = gdeltCache[query];
   if (cached && Date.now() - cached.ts < GDELT_TTL) return cached.articles;
+  // Reuse an in-flight request for the same query.
+  if (gdeltPending[query]) return gdeltPending[query];
 
-  // Enforce at least 6 s between GDELT fetches (residential IP rate limit).
-  const wait = 6000 - (Date.now() - lastGdeltFetch);
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastGdeltFetch = Date.now();
+  const doFetch = async (retrying = false) => {
+    const params = new URLSearchParams({
+      query, mode: 'ArtList', format: 'json',
+      maxrecords: '75', sort: 'hybridrel', timespan: '3weeks',
+    });
+    const url = `https://api.gdeltproject.org/api/v2/doc/doc?${params}`;
+    let res;
+    try { res = await fetch(url); }
+    catch { throw new Error('Could not reach GDELT. Check your internet connection.'); }
+    if (res.status === 429) {
+      if (!retrying) {
+        await new Promise(r => setTimeout(r, 5500));
+        return doFetch(true);
+      }
+      throw new Error('GDELT_RATE_LIMITED');
+    }
+    if (!res.ok) throw new Error(`GDELT ${res.status}`);
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { return []; }
+    const articles = Array.isArray(data.articles) ? data.articles : [];
+    gdeltCache[query] = { articles, ts: Date.now() };
+    return articles;
+  };
 
-  const params = new URLSearchParams({
-    query, mode: 'ArtList', format: 'json',
-    maxrecords: '75', sort: 'hybridrel', timespan: '3weeks',
-  });
-  const url = `https://api.gdeltproject.org/api/v2/doc/doc?${params}`;
-
-  let res;
-  try { res = await fetch(url); }
-  catch { throw new Error('Could not reach GDELT. Check your internet connection.'); }
-
-  if (res.status === 429) throw new Error('GDELT_RATE_LIMITED');
-  if (!res.ok) throw new Error(`GDELT ${res.status}`);
-
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { return []; }
-  const articles = Array.isArray(data.articles) ? data.articles : [];
-  gdeltCache[query] = { articles, ts: Date.now() };
-  return articles;
+  const promise = doFetch().finally(() => { delete gdeltPending[query]; });
+  gdeltPending[query] = promise;
+  return promise;
 }
+
+// Pre-fetch every channel in the background at startup (5 s apart) so
+// subsequent clicks hit the cache and skip straight to Claude.
+(async () => {
+  for (const ch of CHANNELS) {
+    if (!ch.gdelt) continue;
+    try { await fetchGdelt(ch.gdelt); } catch {}
+    await new Promise(r => setTimeout(r, 5500));
+  }
+})();
 
 function dedupArticles(articles) {
   const seen = new Set();
