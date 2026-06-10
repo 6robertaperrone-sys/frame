@@ -28,7 +28,8 @@ LOCATION: ${place}
 WHY IT MATTERS PHOTOGRAPHICALLY: ${why_photograph || "(not provided)"}
 TAGS: ${Array.isArray(tags) ? tags.join(", ") : ""}
 
-Write the scouting report.`;
+Return a JSON object with this exact structure (raw JSON, no markdown):
+{"best_season":"...","best_time_of_day":"...","access":"...","access_level":"easy|moderate|hard","permits":"...","contacts":"...","safety":"...","safety_level":"low|moderate|high","visual_approach":"...","gear_note":"..."}`;
 
     const stream = client.messages.stream({
       model: "claude-opus-4-8",
