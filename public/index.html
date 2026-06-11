@@ -420,6 +420,8 @@ let scoutCard = null;
 let currentChannel = null;
 let currentSort = 'score';
 let currentView = 'grid';
+const scanCache = {}; // key → { stories, label, ts }
+const SCAN_TTL = 30 * 60 * 1000; // 30 min
 let mapInstance = null;
 let mapMarkers = [];
 let mapLocated = [];
@@ -450,6 +452,22 @@ initChannels();
 function selectChannel(key) {
   currentChannel = key;
   document.querySelectorAll('.channel').forEach(c => c.classList.toggle('active', c.dataset.key === key));
+
+  // If this channel was already scanned recently, show results instantly.
+  const hit = scanCache[key];
+  if (hit && Date.now() - hit.ts < SCAN_TTL) {
+    allCards = hit.stories;
+    const mins = Math.floor((Date.now() - hit.ts) / 60000);
+    const age = mins < 1 ? 'just now' : `${mins} min ago`;
+    document.getElementById('statusDot').className = 'status-dot';
+    document.getElementById('statusDot').style.background = 'var(--green)';
+    document.getElementById('statusText').textContent =
+      `${allCards.length} stories · ${hit.label} · scanned ${age} — Develop ▸ to refresh`;
+    renderCards();
+    if (currentView === 'map') renderMap();
+    return;
+  }
+
   runSearch();
 }
 
@@ -900,6 +918,11 @@ async function runSearch() {
     }
     const data = await res.json();
     allCards = data.stories || [];
+
+    // Cache results so switching back to this channel is instant.
+    if (allCards.length > 0) {
+      scanCache[currentChannel] = { stories: allCards, label: scanLabel, ts: Date.now() };
+    }
 
     document.getElementById('statusDot').className = 'status-dot';
     document.getElementById('statusDot').style.background = 'var(--green)';
