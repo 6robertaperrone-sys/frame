@@ -724,57 +724,54 @@ function renderScout(r) {
     </div>`;
 }
 
-/* ---------- GDELT (client-side, cache + dedup-in-flight + 429 retry) ---------- */
-const gdeltCache = {};    // query → { articles, ts }
-const gdeltPending = {};  // query → Promise (dedup concurrent calls)
+/* ---------- GDELT (client-side, cache + serialised queue) ---------- */
+const gdeltCache = {};   // query → { articles, ts }
 const GDELT_TTL = 20 * 60 * 1000;
 
-async function fetchGdelt(query) {
-  // Return cached result if still fresh.
-  const cached = gdeltCache[query];
-  if (cached && Date.now() - cached.ts < GDELT_TTL) return cached.articles;
-  // Reuse an in-flight request for the same query.
-  if (gdeltPending[query]) return gdeltPending[query];
+// All GDELT requests flow through a single serial queue so they are at
+// least 5.5 s apart and never hit the "1 req / 5 s" rate limit.
+let gdeltQueue = Promise.resolve();
 
-  const doFetch = async (retrying = false) => {
+function enqueueGdelt(query) {
+  let resolve, reject;
+  const outer = new Promise((res, rej) => { resolve = res; reject = rej; });
+
+  gdeltQueue = gdeltQueue.then(async () => {
+    // Another parallel call may have already populated the cache.
+    const c = gdeltCache[query];
+    if (c && Date.now() - c.ts < GDELT_TTL) { resolve(c.articles); return; }
+
     const params = new URLSearchParams({
       query, mode: 'ArtList', format: 'json',
       maxrecords: '75', sort: 'hybridrel', timespan: '3weeks',
     });
     const url = `https://api.gdeltproject.org/api/v2/doc/doc?${params}`;
+
     let res;
     try { res = await fetch(url); }
-    catch { throw new Error('Could not reach GDELT. Check your internet connection.'); }
-    if (res.status === 429) {
-      if (!retrying) {
-        await new Promise(r => setTimeout(r, 5500));
-        return doFetch(true);
-      }
-      throw new Error('GDELT_RATE_LIMITED');
+    catch (e) { reject(new Error('Could not reach GDELT.')); return; }
+
+    if (!res.ok) {
+      reject(new Error(res.status === 429 ? 'GDELT_RATE_LIMITED' : `GDELT ${res.status}`));
+      return;
     }
-    if (!res.ok) throw new Error(`GDELT ${res.status}`);
+
     const text = await res.text();
     let data;
-    try { data = JSON.parse(text); } catch { return []; }
+    try { data = JSON.parse(text); } catch { resolve([]); return; }
     const articles = Array.isArray(data.articles) ? data.articles : [];
     gdeltCache[query] = { articles, ts: Date.now() };
-    return articles;
-  };
+    resolve(articles);
+  }).catch(() => {}).then(() => new Promise(r => setTimeout(r, 5500)));
 
-  const promise = doFetch().finally(() => { delete gdeltPending[query]; });
-  gdeltPending[query] = promise;
-  return promise;
+  return outer;
 }
 
-// Pre-fetch every channel in the background at startup (5 s apart) so
-// subsequent clicks hit the cache and skip straight to Claude.
-(async () => {
-  for (const ch of CHANNELS) {
-    if (!ch.gdelt) continue;
-    try { await fetchGdelt(ch.gdelt); } catch {}
-    await new Promise(r => setTimeout(r, 5500));
-  }
-})();
+async function fetchGdelt(query) {
+  const c = gdeltCache[query];
+  if (c && Date.now() - c.ts < GDELT_TTL) return c.articles;
+  return enqueueGdelt(query);
+}
 
 function dedupArticles(articles) {
   const seen = new Set();
