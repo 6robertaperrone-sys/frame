@@ -23,7 +23,23 @@
     --red: #E07070;
   }
 
-  body { background: var(--black); color: var(--paper); font-family: 'DM Mono', monospace; min-height: 100vh; }
+  body.light {
+    --black: #FFFFFF;
+    --panel: #F0EDE8;
+    --paper: #111111;
+    --amber: #7A5C1E;
+    --grey: #555555;
+    --grey-light: #2A2520;
+    --ink: #FAF8F5;
+    --border: rgba(0,0,0,0.12);
+    --green: #2A6B1A;
+    --red: #C0392B;
+  }
+
+  body { background: var(--black); color: var(--paper); font-family: 'DM Mono', monospace; min-height: 100vh; transition: background 0.2s, color 0.2s; }
+
+  #themeBtn { background: transparent; border: 1px solid var(--border); color: var(--grey); font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.05em; padding: 4px 10px; cursor: pointer; }
+  #themeBtn:hover { color: var(--paper); border-color: var(--grey); }
 
   header {
     border-bottom: 1px solid var(--border);
@@ -290,6 +306,7 @@
       <button class="sort-btn" id="sort-urgent" onclick="setSort('urgent',this)">Urgency</button>
       <button class="sort-btn" id="sort-access" onclick="setSort('access',this)">Access</button>
     </div>
+    <button id="themeBtn" onclick="toggleTheme()">◑ Light</button>
   </div>
 </div>
 
@@ -384,13 +401,13 @@ const CHANNELS = [
   },
   {
     key: 'rome', label: 'Rome', sub: 'storie dalla capitale',
-    gdelt: '(Rome OR Roma) (housing OR eviction OR migrant OR protest OR gentrification OR suburb OR flood OR poverty OR squat OR occupation OR periphery OR homeless)',
+    gdelt: '(Rome OR Roma OR "città di Roma" OR Lazio) (housing OR eviction OR sfratto OR sfratti OR migrant OR migranti OR protest OR protesta OR flood OR alluvione OR poverty OR povertà OR quartiere OR periferia OR workers OR lavoratori OR affitti OR homeless OR senzatetto)',
     seed: 'stories from Rome and its territory — gentrification of the historic centre, life in the periphery (Tor Bella Monaca, Corviale, Ostia), housing evictions, migration and integration, the gap between the postcard city and the city where people actually live',
   },
   {
     key: 'italy', label: 'Italy', sub: 'storie dall\'italia',
-    gdelt: '(Italy OR Italian) (flood OR landslide OR protest OR migrant OR poverty OR worker OR "southern Italy" OR Sicily OR Calabria OR Naples OR depopulation OR drought OR earthquake OR strike)',
-    seed: 'stories from across Italy — environmental disasters (floods in Emilia-Romagna, landslides, drought), labor struggles, migration to the south and depopulation of inland villages, economic inequality between north and south, workers invisible to the mainstream',
+    gdelt: '(Italy OR Italian OR Italia OR Sicilia OR Calabria OR Napoli OR "Emilia Romagna" OR Sardegna) (flood OR alluvione OR frana OR earthquake OR terremoto OR migrant OR migranti OR workers OR lavoratori OR protest OR sciopero OR strike OR poverty OR povertà OR drought OR siccità OR landslide)',
+    seed: 'stories from across Italy — environmental disasters (floods in Emilia-Romagna, landslides, drought), labor struggles, migration and depopulation of inland villages, economic inequality between north and south, workers invisible to the mainstream',
   },
 ];
 
@@ -911,6 +928,16 @@ async function runSearch() {
 
 document.getElementById('searchInput').addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeScout(); closeRoll(); } });
+
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light');
+  document.getElementById('themeBtn').textContent = isLight ? '◑ Dark' : '◑ Light';
+  localStorage.setItem('frame.theme', isLight ? 'light' : 'dark');
+}
+if (localStorage.getItem('frame.theme') === 'light') {
+  document.body.classList.add('light');
+  document.getElementById('themeBtn').textContent = '◑ Dark';
+}
 </script>
 </body>
 </html>
