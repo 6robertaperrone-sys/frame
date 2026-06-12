@@ -36,21 +36,10 @@ async function fetchGdeltServer(query) {
   if (cached && Date.now() - cached.ts < SERVER_GDELT_TTL) {
     return cached.articles;
   }
-  try {
-    const params = new URLSearchParams({
-      query, mode: "ArtList", format: "json",
-      maxrecords: "75", sort: "hybridrel", timespan: "3weeks",
-    });
-    const res = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?${params}`);
-    if (!res.ok) return [];
-    const text = await res.text();
-    const data = JSON.parse(text);
-    const articles = dedupArticles(Array.isArray(data.articles) ? data.articles : []);
-    serverGdeltCache[query] = { articles, ts: Date.now() };
-    return articles;
-  } catch {
-    return [];
-  }
+  // Don't try a live GDELT fetch from the server — Vercel's shared IPs are
+  // almost always rate-limited by GDELT. The browser handles live fetches
+  // via its serialised queue (5.5 s spacing); we only serve warm cache here.
+  return [];
 }
 
 // ---------- Claude ----------

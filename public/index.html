@@ -905,16 +905,30 @@ async function runSearch() {
       ? `${channel.gdelt} (${refine})`
       : channel.gdelt;
     let articles = [];
-    let source = 'browser';
-    try {
-      const rawArticles = await fetchGdelt(query);
-      articles = dedupArticles(rawArticles);
-    } catch (gdeltErr) {
-      if (gdeltErr.message === 'GDELT_RATE_LIMITED') {
-        source = 'rate_limited';
-      } else {
-        console.warn('Browser GDELT fetch failed, server will retry:', gdeltErr);
-        source = 'server';
+    let source = 'server';
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        document.getElementById('statusText').textContent =
+          `News feed busy — retrying (${attempt}/2)…`;
+        // The serialised queue already waits 5.5 s after each attempt,
+        // so no explicit sleep is needed here.
+      }
+      try {
+        const rawArticles = await fetchGdelt(query);
+        articles = dedupArticles(rawArticles);
+        source = 'browser';
+        break;
+      } catch (gdeltErr) {
+        if (gdeltErr.message === 'GDELT_RATE_LIMITED') {
+          source = 'rate_limited';
+          break;
+        }
+        // Non-rate-limit error (network, 503, etc.) — the queue will wait
+        // 5.5 s before the next attempt runs automatically.
+        if (attempt === 2) {
+          console.warn('All GDELT retries exhausted, falling back to server cache:', gdeltErr);
+          // source remains 'server'
+        }
       }
     }
 
