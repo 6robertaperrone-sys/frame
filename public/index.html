@@ -266,6 +266,24 @@
     .grid { grid-template-columns: 1fr; }
     #map { height: 460px; }
   }
+
+  /* ---- Auth gate ---- */
+  #authGate { position:fixed;inset:0;z-index:9999;background:var(--black);display:flex;align-items:center;justify-content:center;flex-direction:column; }
+  .auth-logo { font-size:10px;letter-spacing:0.4em;color:var(--amber);margin-bottom:32px;text-transform:uppercase; }
+  .auth-input { background:transparent;border:1px solid var(--border);color:var(--paper);font-family:'DM Mono',monospace;font-size:13px;padding:12px 18px;width:240px;outline:none;letter-spacing:0.05em;text-align:center; }
+  .auth-input:focus { border-color:var(--amber); }
+  .auth-error { color:var(--red);font-size:10px;letter-spacing:0.1em;margin-top:10px;min-height:14px;text-align:center; }
+
+  /* ---- Article link in card ---- */
+  .card-article-link { display:inline-block;margin-top:6px;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:var(--grey);text-decoration:none;border-bottom:1px solid transparent; }
+  .card-article-link:hover { color:var(--amber);border-bottom-color:var(--amber); }
+
+  /* ---- Scout source hint ---- */
+  .scout-source { font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--amber);margin-top:6px;opacity:0.8; }
+
+  /* ---- Footer ---- */
+  .app-footer { padding:20px 32px;font-size:9px;letter-spacing:0.1em;color:var(--grey);opacity:0.5;text-align:right; }
+  .app-footer a { color:inherit; }
 </style>
 </head>
 <body>
@@ -320,6 +338,8 @@
 
 <div id="mapView"><div id="map"></div></div>
 
+<footer class="app-footer">News data: <a href="https://www.gdeltproject.org/" target="_blank" rel="noopener">GDELT Project</a> · AI curation: Anthropic Claude</footer>
+
 <div class="drawer-overlay" id="drawerOverlay" onclick="closeRoll()"></div>
 <div class="drawer" id="drawer">
   <div class="drawer-head">
@@ -330,6 +350,13 @@
   <div class="drawer-foot">
     <button class="btn-export" onclick="exportRoll()">Export shortlist ↓</button>
   </div>
+</div>
+
+<div id="authGate" style="display:none">
+  <div class="auth-logo">FRAME</div>
+  <input class="auth-input" id="authInput" type="password" placeholder="password"
+    onkeydown="if(event.key==='Enter')submitPassword()">
+  <div class="auth-error" id="authError"></div>
 </div>
 
 <div class="scout-overlay" id="scoutOverlay" onclick="if(event.target===this)closeScout()">
@@ -533,6 +560,7 @@ function renderCards() {
         <button class="save-star ${saved}" title="Save to The Roll" onclick="event.stopPropagation(); toggleSave(${idx})">${star}</button>
       </div>
       <div class="card-title">${escapeHtml(card.title)}</div>
+      ${card.url ? `<a class="card-article-link" href="${escapeHtml(card.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗ read source article</a>` : ''}
       <div class="card-why">${escapeHtml(card.why_photograph)}</div>
       <div class="score-block">
         <div class="score-row"><span class="score-label">Visual depth</span><span class="score-bar">${filmBar(card.scores.visual_depth)}</span></div>
@@ -739,17 +767,19 @@ function renderScout(r) {
         <div class="scout-field-text">${escapeHtml(r.best_season || '—')}</div>
       </div>
       <div class="scout-field">
-        <div class="scout-field-head"><span class="scout-field-label">Light</span></div>
-        <div class="scout-field-text">${escapeHtml(r.best_time_of_day || '—')}</div>
+        <div class="scout-field-head"><span class="scout-field-label">Timing constraints</span></div>
+        <div class="scout-field-text">${escapeHtml(r.constraints || 'None noted')}</div>
       </div>
     </div>
     <div class="scout-field">
       <div class="scout-field-head"><span class="scout-field-label">Access</span><span class="scout-badge ${accClass}">${escapeHtml(r.access_level || '')}</span></div>
       <div class="scout-field-text">${escapeHtml(r.access || '—')}</div>
+      ${r.access_source ? `<div class="scout-source">▸ Verify with: ${escapeHtml(r.access_source)}</div>` : ''}
     </div>
     <div class="scout-field">
       <div class="scout-field-head"><span class="scout-field-label">Permits & permissions</span></div>
       <div class="scout-field-text">${escapeHtml(r.permits || '—')}</div>
+      ${r.permits_source ? `<div class="scout-source">▸ Apply to: ${escapeHtml(r.permits_source)}</div>` : ''}
     </div>
     <div class="scout-field">
       <div class="scout-field-head"><span class="scout-field-label">Who to approach</span></div>
@@ -764,7 +794,7 @@ function renderScout(r) {
       <div class="scout-field-text">${escapeHtml(r.visual_approach || '—')}</div>
     </div>
     <div class="scout-field">
-      <div class="scout-field-head"><span class="scout-field-label">Gear note</span></div>
+      <div class="scout-field-head"><span class="scout-field-label">Gear</span></div>
       <div class="scout-field-text">${escapeHtml(r.gear_note || '—')}</div>
     </div>`;
 }
@@ -827,6 +857,7 @@ function dedupArticles(articles) {
     seen.add(key);
     out.push({
       title: a.title || '',
+      url: a.url || '',
       domain: a.domain || '',
       country: a.sourcecountry || '',
       language: a.language || '',
@@ -961,6 +992,40 @@ if (localStorage.getItem('frame.theme') === 'light') {
   document.body.classList.add('light');
   document.getElementById('themeBtn').textContent = '◑ Dark';
 }
+
+/* ---------- Auth gate ---------- */
+async function checkAuth() {
+  const res = await fetch('/api/auth', { method: 'GET', headers: { 'Content-Type': 'application/json' } });
+  const data = await res.json().catch(() => ({}));
+  if (data.ok) return; // open access or valid token not needed
+  const token = localStorage.getItem('frame.token');
+  if (token) {
+    const v = await fetch(`/api/auth?token=${encodeURIComponent(token)}`);
+    const vd = await v.json().catch(() => ({}));
+    if (vd.ok) return;
+  }
+  document.getElementById('authGate').style.display = 'flex';
+}
+
+async function submitPassword() {
+  const pw = document.getElementById('authInput').value;
+  const res = await fetch('/api/auth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (data.ok) {
+    localStorage.setItem('frame.token', data.token);
+    document.getElementById('authGate').style.display = 'none';
+  } else {
+    document.getElementById('authError').textContent = '— wrong password';
+    document.getElementById('authInput').value = '';
+    document.getElementById('authInput').focus();
+  }
+}
+
+checkAuth();
 </script>
 </body>
 </html>

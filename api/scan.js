@@ -1,11 +1,57 @@
 // FRAME — /api/scan
-// Receives pre-fetched GDELT articles from the browser (uses the user's IP,
-// avoids Vercel shared-IP rate limits). If the browser couldn't reach GDELT,
-// returns a friendly retry message — no server-side GDELT fetch.
+// Primary: receives pre-fetched GDELT articles from the browser.
+// Fallback: if the browser couldn't reach GDELT, tries server-side GDELT
+// using a module-level cache (persists across warm Vercel instances).
 
 import Anthropic from "@anthropic-ai/sdk";
 
 const client = new Anthropic();
+
+// ---------- Server-side GDELT cache (module-level, warm across invocations) ----------
+const serverGdeltCache = {};
+const SERVER_GDELT_TTL = 25 * 60 * 1000; // 25 min
+
+function dedupArticles(articles) {
+  const seen = new Set();
+  const out = [];
+  for (const a of articles) {
+    const key = `${a.domain}|${(a.title || "").slice(0, 60).toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      title: a.title || "",
+      url: a.url || "",
+      domain: a.domain || "",
+      country: a.sourcecountry || "",
+      language: a.language || "",
+      seendate: a.seendate || "",
+    });
+    if (out.length >= 40) break;
+  }
+  return out;
+}
+
+async function fetchGdeltServer(query) {
+  const cached = serverGdeltCache[query];
+  if (cached && Date.now() - cached.ts < SERVER_GDELT_TTL) {
+    return cached.articles;
+  }
+  try {
+    const params = new URLSearchParams({
+      query, mode: "ArtList", format: "json",
+      maxrecords: "75", sort: "hybridrel", timespan: "3weeks",
+    });
+    const res = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?${params}`);
+    if (!res.ok) return [];
+    const text = await res.text();
+    const data = JSON.parse(text);
+    const articles = dedupArticles(Array.isArray(data.articles) ? data.articles : []);
+    serverGdeltCache[query] = { articles, ts: Date.now() };
+    return articles;
+  } catch {
+    return [];
+  }
+}
 
 // ---------- Claude ----------
 
@@ -31,6 +77,7 @@ Return 10 to 20 stories spread across DIFFERENT countries and continents when po
 For each story:
 - title: how a photographer would pitch it to an editor — specific, human, visual (not the wire headline)
 - source: short attribution ("Reuters", "Local report", or the outlet from the candidates)
+- url: the URL of the single most relevant candidate article for this story (copy it exactly from the list — empty string if none matches)
 - place: the specific place where a photographer should go ("Daikundi Province, Afghanistan", "Yurumangui River, Colombia")
 - lat / lng: best-guess coordinates of that place
 - why_photograph: 1–2 sentences on what images could reveal that words cannot — the visual logic of the story
@@ -43,7 +90,7 @@ function buildUserPrompt(channel, refine, candidates) {
   const list = candidates
     .map((c, i) => {
       const date = c.seendate ? String(c.seendate).slice(0, 8) : "";
-      return `${i + 1}. [${c.country || "?"}] (${date}) ${c.domain || ""} — ${c.title || ""}`;
+      return `${i + 1}. [${c.country || "?"}] (${date}) ${c.domain || ""} — ${c.title || ""}${c.url ? `\n   URL: ${c.url}` : ""}`;
     })
     .join("\n");
 
@@ -56,7 +103,7 @@ CANDIDATE NEWS ITEMS:
 ${list}
 
 Return the strongest 10–20 photographic stories as a JSON object with this exact structure:
-{"stories": [ { "title": "...", "source": "...", "place": "...", "lat": 0.0, "lng": 0.0, "why_photograph": "...", "scores": { "visual_depth": 0, "human_angle": 0, "accessibility": 0, "urgency": 0 }, "total_score": 0, "tags": ["..."] } ]}
+{"stories": [ { "title": "...", "source": "...", "url": "https://...", "place": "...", "lat": 0.0, "lng": 0.0, "why_photograph": "...", "scores": { "visual_depth": 0, "human_angle": 0, "accessibility": 0, "urgency": 0 }, "total_score": 0, "tags": ["..."] } ]}
 Output raw JSON only, no markdown.`;
 }
 
@@ -85,32 +132,41 @@ export default async function handler(req, res) {
     let candidates = Array.isArray(clientArticles) ? clientArticles : [];
 
     if (candidates.length === 0) {
-      // Browser was rate-limited by GDELT.
       if (gdeltRateLimited) {
-        res.status(200).json({
-          stories: [],
-          notice: "GDELT is busy right now — wait 60 seconds and try again.",
-        });
-        return;
-      }
-      // Browser reached GDELT successfully but got 0 results.
-      if (browserGdeltOk) {
+        // Browser got 429 — try server cache before giving up
+        if (channel.gdelt) {
+          const query = refine ? `${channel.gdelt} (${refine})` : channel.gdelt;
+          candidates = await fetchGdeltServer(query);
+        }
+        if (candidates.length === 0) {
+          res.status(200).json({
+            stories: [],
+            notice: "GDELT is busy right now — wait 30 seconds and try again.",
+          });
+          return;
+        }
+      } else if (browserGdeltOk) {
         res.status(200).json({
           stories: [],
           notice: "No recent news matched this channel. Try again in a few minutes or pick another channel.",
         });
         return;
+      } else {
+        // Browser network error — try server-side GDELT (with cache)
+        if (channel.gdelt) {
+          const query = refine ? `${channel.gdelt} (${refine})` : channel.gdelt;
+          candidates = await fetchGdeltServer(query);
+        }
+        if (candidates.length === 0) {
+          res.status(200).json({
+            stories: [],
+            notice: "Couldn't reach the news feed — wait a moment and try again.",
+          });
+          return;
+        }
       }
-      // Browser got a network error — ask user to retry instead of hitting GDELT
-      // from Vercel's shared IPs (which get rate-limited immediately).
-      res.status(200).json({
-        stories: [],
-        notice: "Couldn't reach the news feed — wait a moment and try again.",
-      });
-      return;
     }
 
-    // Cap to keep the prompt manageable.
     candidates = candidates.slice(0, 40);
 
     const stream = client.messages.stream({
@@ -125,13 +181,9 @@ export default async function handler(req, res) {
     });
 
     const message = await stream.finalMessage();
-
     const textBlock = message.content.find((b) => b.type === "text");
-    if (!textBlock) {
-      throw new Error("Claude returned no text content");
-    }
+    if (!textBlock) throw new Error("Claude returned no text content");
 
-    // Strip markdown code fences if Claude wraps the JSON
     let raw = textBlock.text.trim();
     const fence = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     if (fence) raw = fence[1].trim();
@@ -140,15 +192,10 @@ export default async function handler(req, res) {
 
     res.status(200).json({
       stories,
-      meta: {
-        gdelt_candidates: candidates.length,
-        model: message.model,
-      },
+      meta: { gdelt_candidates: candidates.length, model: message.model },
     });
   } catch (err) {
     console.error("scan error:", err);
-    res.status(500).json({
-      error: err?.message || "Internal error",
-    });
+    res.status(500).json({ error: err?.message || "Internal error" });
   }
 }
